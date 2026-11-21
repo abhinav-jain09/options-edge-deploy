@@ -20,7 +20,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 JAR = ROOT / "tools/schema-governance/schema-governance-tool.jar"
 SUBJECT = "futures.level-absorption.events-value"
-V1, V2 = 2702, 2812
+V1, V2, V3 = 2702, 2812, 2815   # version 3 (Absorption reads liquidity, contracts 0.102.0) is the current id; 2812 is archival
 
 
 def manifest() -> dict:
@@ -37,20 +37,21 @@ class EventVersionTwo(unittest.TestCase):
         self.m = manifest()
         self.rows = {e["id"]: e for e in self.m["entries"] if e.get("subject") == SUBJECT}
 
-    def test_the_subject_has_exactly_two_versions_under_the_two_ids(self):
-        self.assertEqual(sorted(self.rows), [V1, V2])
-        self.assertEqual((self.rows[V1]["version"], self.rows[V2]["version"]), (1, 2))
+    def test_the_subject_has_exactly_three_versions_under_the_three_ids(self):
+        self.assertEqual(sorted(self.rows), [V1, V2, V3])
+        self.assertEqual((self.rows[V1]["version"], self.rows[V2]["version"], self.rows[V3]["version"]), (1, 2, 3))
         for e in self.rows.values():
             self.assertEqual((e["kind"], e["family"], e["environments"], e["topics"]), ("MIRRORED", "futures", ["dev"], [{"name": "futures.level-absorption.events", "kind": "data"}]))
             self.assertTrue(e["retained"])
 
     def test_each_snapshot_hashes_to_its_entry_and_to_its_contracts_source(self):
-        for i, snap in ((V1, "v1.avsc"), (V2, "v2.avsc")):
+        for i, snap in ((V1, "v1.avsc"), (V2, "v2.avsc"), (V3, "v3.avsc")):
             e = self.rows[i]
             self.assertEqual(e["schemaFile"], f"{SUBJECT}/{snap}")
             self.assertEqual(snapshot_hash(f"schema-manifest/schemas/{SUBJECT}/{snap}"), e["schemaHash"], f"id {i}")
         self.assertEqual(self.rows[V1]["source"], {"kind": "FILE", "repo": "contracts", "path": "schemas/cvd-related/v1/LevelAbsorptionEvent.avsc"})
-        self.assertEqual(self.rows[V2]["source"], {"kind": "FILE", "repo": "contracts", "path": "schemas/cvd-related/LevelAbsorptionEvent.avsc"})
+        self.assertEqual(self.rows[V2]["source"], {"kind": "FILE", "repo": "contracts", "path": "schemas/cvd-related/v2/LevelAbsorptionEvent.avsc"})   # frozen when version 3 became the current file
+        self.assertEqual(self.rows[V3]["source"], {"kind": "FILE", "repo": "contracts", "path": "schemas/cvd-related/LevelAbsorptionEvent.avsc"})
 
     def test_version_two_is_version_one_plus_the_42_optional_book_fields(self):
         v1 = json.loads((ROOT / f"schema-manifest/schemas/{SUBJECT}/v1.avsc").read_text())
@@ -76,42 +77,50 @@ class EventVersionTwo(unittest.TestCase):
                 holders.append(e["subject"])
         self.assertEqual(holders, [SUBJECT])
         self.assertIn([V2, V2], self.m["familyBlocks"]["futures"])
+        self.assertIn([V3, V3], self.m["familyBlocks"]["futures"])
+        self.assertEqual([e["subject"] for e in self.m["entries"] if V3 in [e.get("id")] + list((e.get("idByEnvironment") or {}).values())], [SUBJECT], "2815 is held by this subject alone")
         # the next integers after the manual line are held by other subjects on es4: that is why the id is not 2704
         held = {e["subject"].split(".")[-1] for e in self.m["entries"] if 2704 in list((e.get("idByEnvironment") or {}).values())}
         self.assertEqual(held, {"DeltaFlowCalibrationRecord"})
 
-    def test_the_producer_is_level_absorption_and_every_reader_accepts_both_ids(self):
-        self.assertEqual(self.rows[V2]["producers"], [{"service": "level-absorption", "environments": ["dev"]}])
+    def test_the_producer_is_level_absorption_and_every_reader_accepts_all_three_ids(self):
+        self.assertEqual(self.rows[V3]["producers"], [{"service": "level-absorption", "environments": ["dev"]}])
+        self.assertEqual(self.rows[V2]["producers"], [], "nothing writes the archival version 2 any more")
         self.assertEqual(self.rows[V1]["producers"], [])
-        for i in (V1, V2):
-            self.assertEqual(self.rows[i]["consumers"], [{"service": "liquidity-validator", "accepts": [V1, V2], "environments": ["dev"]}], f"id {i}")
+        for i in (V1, V2, V3):
+            self.assertEqual(self.rows[i]["consumers"], [{"service": "liquidity-validator", "accepts": [V1, V2, V3], "environments": ["dev"]}], f"id {i}")
 
-    def test_the_plan_of_each_bound_service_registers_both_versions_in_order(self):
+    def test_level_absorption_reads_the_liquidity_targets_under_both_of_their_ids(self):
+        for i in (3411, 3413):
+            row = next(e for e in self.m["entries"] if e.get("id") == i)
+            self.assertIn({"service": "level-absorption", "accepts": [3411, 3413], "environments": ["dev"]}, row["consumers"], f"id {i}")
+
+    def test_the_plan_of_each_bound_service_registers_all_three_versions_in_order(self):
         for svc in ("level-absorption", "liquidity-validator"):
             with tempfile.TemporaryDirectory() as out:
                 run = subprocess.run(["java", "-jar", str(JAR), "plan", "--manifest", str(ROOT / "schema-manifest/manifest.json"), "--env", "dev", "--service", svc, "--out", out],
                                      capture_output=True, text=True, check=True)
                 rows = [l for l in (Path(out) / "plan.map").read_text().splitlines() if l.startswith(SUBJECT)]
-            self.assertEqual(rows, [f"{SUBJECT}|{V1}|{SUBJECT}/v1.avsc|1", f"{SUBJECT}|{V2}|{SUBJECT}/v2.avsc|2"], svc + run.stderr[-200:])
+            self.assertEqual(rows, [f"{SUBJECT}|{V1}|{SUBJECT}/v1.avsc|1", f"{SUBJECT}|{V2}|{SUBJECT}/v2.avsc|2", f"{SUBJECT}|{V3}|{SUBJECT}/v3.avsc|3"], svc + run.stderr[-200:])
 
 
     def _label(self, svc: str, drop_v2: bool) -> dict:
         """The image label (src/main/resources/schema-requirements.json) the manifest's bindings for this dev service call for: the rows of every entry that binds it, optionally without id 2812."""
         produces, consumes = [], {}
         for e in self.m["entries"]:
-            if "dev" not in e.get("environments", []) or (drop_v2 and e.get("id") == V2):
+            if "dev" not in e.get("environments", []) or (drop_v2 and e.get("id") == V3):
                 continue
             for p in e.get("producers") or []:
                 if p["service"] == svc:
                     produces.append({"subject": e["subject"], "id": e["id"], "schemaHash": e["schemaHash"]})
             for c in e.get("consumers") or []:
                 if c["service"] == svc:
-                    consumes.setdefault(e["subject"], set()).update(a for a in c["accepts"] if not (drop_v2 and a == V2))
+                    consumes.setdefault(e["subject"], set()).update(a for a in c["accepts"] if not (drop_v2 and a == V3))
         return {"produces": produces, "consumes": [{"subject": k, "accepts": sorted(v)} for k, v in sorted(consumes.items())]}
 
-    def test_an_image_label_without_id_2812_is_refused_by_the_gate_and_one_with_it_is_accepted(self):
-        # scripts/ci/schema-sync.sh reads the digest-pinned image label and runs `plan --label`: a producer or reader image built before it knows 2812 cannot roll
-        for svc, needle in (("level-absorption", f"produces {SUBJECT}|{V2}|"), ("liquidity-validator", f"consumes {SUBJECT}|{V2}")):
+    def test_an_image_label_without_id_2815_is_refused_by_the_gate_and_one_with_it_is_accepted(self):
+        # scripts/ci/schema-sync.sh reads the digest-pinned image label and runs `plan --label`: a producer or reader image built before it knows 2815 cannot roll
+        for svc, needle in (("level-absorption", f"produces {SUBJECT}|{V3}|"), ("liquidity-validator", f"consumes {SUBJECT}|{V3}")):
             for drop, ok in ((True, False), (False, True)):
                 with tempfile.TemporaryDirectory() as d:
                     label = Path(d) / "label.json"

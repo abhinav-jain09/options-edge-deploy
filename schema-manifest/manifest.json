@@ -756,6 +756,10 @@
       [
         2814,
         2814
+      ],
+      [
+        2815,
+        2815
       ]
     ],
     "options": [
@@ -5752,6 +5756,16 @@
           "environments": [
             "dev"
           ]
+        },
+        {
+          "service": "level-absorption",
+          "accepts": [
+            3411,
+            3413
+          ],
+          "environments": [
+            "dev"
+          ]
         }
       ],
       "retained": true,
@@ -5790,6 +5804,16 @@
       "consumers": [
         {
           "service": "feed-gateway",
+          "accepts": [
+            3411,
+            3413
+          ],
+          "environments": [
+            "dev"
+          ]
+        },
+        {
+          "service": "level-absorption",
           "accepts": [
             3411,
             3413
@@ -10893,7 +10917,8 @@
           "service": "liquidity-validator",
           "accepts": [
             2702,
-            2812
+            2812,
+            2815
           ],
           "environments": [
             "dev"
@@ -10911,6 +10936,45 @@
       "family": "futures",
       "schemaFile": "futures.level-absorption.events-value/v2.avsc",
       "schemaHash": "9cf7148f582d5d0fddb1ab8a8f124f4fccf0fe5628b64fc0dca8b706b55d6d88",
+      "environments": [
+        "dev"
+      ],
+      "source": {
+        "kind": "FILE",
+        "repo": "contracts",
+        "path": "schemas/cvd-related/v2/LevelAbsorptionEvent.avsc"
+      },
+      "topics": [
+        {
+          "name": "futures.level-absorption.events",
+          "kind": "data"
+        }
+      ],
+      "producers": [],
+      "consumers": [
+        {
+          "service": "liquidity-validator",
+          "accepts": [
+            2702,
+            2812,
+            2815
+          ],
+          "environments": [
+            "dev"
+          ]
+        }
+      ],
+      "retained": true,
+      "retainedReason": "curated, not baseline: the Level Absorption event with the optional book fields (liquidity requirement A rev 12 section 8, work package K3; contracts 0.88.0, schemas/cvd-related/LevelAbsorptionEvent.avsc, 42 added fields, all nullable with default null, FULL compatible): VERSION 2 under the new fixed id 2812 (2703 to 2752 are held on the es4 registry, so the next integer after 2702 was not free in every registry). Written by level-absorption-service until contracts 0.102.0 (ARCHIVAL since version 3, id 2815, frozen under schemas/cvd-related/v2) through CanonicalAvroKafka.producer (auto.register.schemas=false, the id is looked up under the topic value subject), so this id must be in the registry BEFORE the service image of contracts 0.88.0 starts; schema-sync registers it from this entry on a roll of level-absorption. Readers accept 2702, 2812 and 2815. Dev only; nothing is registered on production or es4."
+    },
+    {
+      "kind": "MIRRORED",
+      "subject": "futures.level-absorption.events-value",
+      "version": 3,
+      "id": 2815,
+      "family": "futures",
+      "schemaFile": "futures.level-absorption.events-value/v3.avsc",
+      "schemaHash": "d776e960b64f9d777cf33a6857aab64008e38a7e462664179f1037028c894c69",
       "environments": [
         "dev"
       ],
@@ -10938,7 +11002,8 @@
           "service": "liquidity-validator",
           "accepts": [
             2702,
-            2812
+            2812,
+            2815
           ],
           "environments": [
             "dev"
@@ -10946,7 +11011,7 @@
         }
       ],
       "retained": true,
-      "retainedReason": "curated, not baseline: the Level Absorption event with the optional book fields (liquidity requirement A rev 12 section 8, work package K3; contracts 0.88.0, schemas/cvd-related/LevelAbsorptionEvent.avsc, 42 added fields, all nullable with default null, FULL compatible): VERSION 2 under the new fixed id 2812 (2703 to 2752 are held on the es4 registry, so the next integer after 2702 was not free in every registry). Written by level-absorption-service on futures.level-absorption.events through CanonicalAvroKafka.producer (auto.register.schemas=false, the id is looked up under the topic value subject), so this id must be in the registry BEFORE the service image of contracts 0.88.0 starts; schema-sync registers it from this entry on a roll of level-absorption. Readers accept both 2702 and 2812. Dev only; nothing is registered on production or es4."
+      "retainedReason": "curated, not baseline: the Level Absorption event with the optional liquidity fields (Absorption reads liquidity, processing docs/level-absorption/LEVEL-ABSORPTION-READS-LIQUIDITY-DESIGN.md section 6; contracts 0.102.0, schemas/cvd-related/LevelAbsorptionEvent.avsc, 40 added fields, all nullable with default null, FULL compatible): VERSION 3 under the new fixed id 2815 (2813 and 2814 are the outcome and scoreboard subjects). Written by level-absorption-service on futures.level-absorption.events through CanonicalAvroKafka.producer (auto.register.schemas=false, the id is looked up under the topic value subject), so this id must be in the registry BEFORE the service image of contracts 0.102.0 starts; schema-sync registers it from this entry on a roll of level-absorption. Readers accept 2702, 2812 and 2815. Dev only; nothing is registered on production or es4."
     },
     {
       "kind": "MIRRORED",
@@ -12111,7 +12176,7 @@
       ],
       "consumers": [],
       "retained": true,
-      "retainedReason": "curated, not baseline: strike-hold-service (NEW, dev only; contracts 0.90.0 schemas-registry/strikehold) writes it on options.spx.strike-hold.scoring under RecordNameStrategy with auto.register.schemas=false (its schema-requirements.json names this id and hash). The EVIDENCE RECORD the base rate is computed from: one row per candidate strike per session, so the topic must NEVER be compacted \u2014 compaction would not degrade the measurement, it would delete it. `held` is a NULLABLE boolean by requirement: a refusal carries null, so it can never be averaged in as an outcome. Dev only; nothing is registered on production or es4."
+      "retainedReason": "curated, not baseline: strike-hold-service (NEW, dev only; contracts 0.90.0 schemas-registry/strikehold) writes it on options.spx.strike-hold.scoring under RecordNameStrategy with auto.register.schemas=false (its schema-requirements.json names this id and hash). The EVIDENCE RECORD the base rate is computed from: one row per candidate strike per session, so the topic must NEVER be compacted — compaction would not degrade the measurement, it would delete it. `held` is a NULLABLE boolean by requirement: a refusal carries null, so it can never be averaged in as an outcome. Dev only; nothing is registered on production or es4."
     },
     {
       "kind": "MIRRORED",
@@ -12155,7 +12220,7 @@
         }
       ],
       "retained": true,
-      "retainedReason": "curated, not baseline: THE COVERAGE MESSAGE (owner-approved). es-liquidity-engine-service writes it on es.mbo.coverage under RecordNameStrategy with auto.register.schemas=false (its schema-requirements.json names this id and hash), and strike-hold-service reads it to tell 'the book showed nothing here' from 'the engine was not watching here' \u2014 without it no absence can honestly be claimed, which is why strike-hold reports ABSORPTION_COVERAGE_UNAVAILABLE and never ABSENT until this exists. A NEW SUBJECT rather than a field on EsMboHealth (3509) deliberately: health is at a fixed id, so a new field means a new version under a new id, and level-absorption-service pins accepts: [3509], which would have forced that consumer to roll in the same change. Id 3511 EXTENDS the esmbo family block past 3501-3510, which was full. Dev only."
+      "retainedReason": "curated, not baseline: THE COVERAGE MESSAGE (owner-approved). es-liquidity-engine-service writes it on es.mbo.coverage under RecordNameStrategy with auto.register.schemas=false (its schema-requirements.json names this id and hash), and strike-hold-service reads it to tell 'the book showed nothing here' from 'the engine was not watching here' — without it no absence can honestly be claimed, which is why strike-hold reports ABSORPTION_COVERAGE_UNAVAILABLE and never ABSENT until this exists. A NEW SUBJECT rather than a field on EsMboHealth (3509) deliberately: health is at a fixed id, so a new field means a new version under a new id, and level-absorption-service pins accepts: [3509], which would have forced that consumer to roll in the same change. Id 3511 EXTENDS the esmbo family block past 3501-3510, which was full. Dev only."
     },
     {
       "kind": "MIRRORED",
