@@ -37,15 +37,3 @@ spec:
           env:
             - name: KAFKA_ES_TRADES_TOPIC
               value: underlying.es.price
-            # TEMPORARY (2026-10-22). REMOVE THIS ENTRY, AND the matching assertion in scripts/ci/validate-services.sh,
-# in the change that is deployed TOGETHER with the es-spx-align image carrying processing#1290: the
-# removal deploys the fixed image digest in the same service-deploy run (REQUIRED_IMAGE pinned) and is
-# NEVER deployed against the old image, which would restore the exit-70 restart loop described below.
-            # the CVD-levels aligner (U16) publishes NOTHING on prod. The running image stamps
-            # publishedAtMs on every record, the registered AlignedCvdLevelsEnvelope has no such
-            # field, so every publish threw, the producer was recreated after each failure (epoch
-            # 4,876; options.es-cvd-spx-levels stayed at offset 0), readiness flapped every few
-            # seconds and the pod exited 70 about every 7 minutes. Nothing consumes the empty
-            # topic. The GEX / strike-intelligence alignment in the same JVM is unaffected.
-            - name: ALIGN_CVD_LEVELS_ENABLED
-              value: "false"
