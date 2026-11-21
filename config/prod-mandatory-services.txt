@@ -21,3 +21,4 @@ raw-postgres-writer                # raw event history
 hpsf-postgres-writer-service       # HPSF history
 stock-gex-service                  # Gamma Lab stock board (live + closing board)
 stock-gex-close-scheduler          # builds the closing board after the close; resumes a killed run
+gc-feed-service                    # gold GC futures trades feed — Globex runs ~24h (owner 2026-11-21: gold replaces the NIFTY plan)
