@@ -64,6 +64,12 @@ resources:
   # overlay k8s/services/nifty-trade-feed/overlays/production mirrors the prod
   # patches — sync enforced by validate-services render equivalence.
   - ../../services/nifty-trade-feed/base
+  # gc-feed: GOLD (GC futures) Databento trades feed — same image as the SPX feed,
+  # GC env, its own Databento key (secret options-edge-databento-gc-feed-env),
+  # hostNetwork metrics :8016. STANDALONE overlay
+  # k8s/services/gc-feed/overlays/production mirrors the prod patches —
+  # sync enforced by validate-services render equivalence.
+  - ../../services/gc-feed/base
 
 # Prod-only: the node already has the images cached, so re-pulling all ~26 at
 # once on every rollout trips the kubelet image-pull QPS limit ("pull QPS

@@ -85,6 +85,8 @@ images:
   nifty-gex-service: 192.168.100.252:5000/options-edge-nifty-gex:prod
   # nifty-trade-feed — the SAME image as nifty-gex-service (command override).
   nifty-trade-feed-service: 192.168.100.252:5000/options-edge-nifty-gex:prod
+  # gc-feed — the SAME image as the SPX feed (options-edge-databento-feed), GC env.
+  gc-feed-service: 192.168.100.252:5000/options-edge-databento-feed:prod
   # broker-execution / amt-order-bridge: absent until 2026-09-24, and for production that is not a
   # warning but a hard stop — service-deploy.sh fails closed ("no entry in image-tags/production.yaml")
   # because the render carries the base dev ref and deploying it would be the dev-image-in-production

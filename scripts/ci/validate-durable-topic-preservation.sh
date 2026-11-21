@@ -570,6 +570,8 @@ options.ibkr.gex.status options.spx.gamma-ladder-path.events options.spx.gamma-l
 options.spx.gamma-migration.crossings options.spx.gamma-migration.fragility
 options.spx.gamma-migration.scoring options.spx.gamma-migration.wall-touch spx.basis.state
 spx.drop.final-summary spx.drop.outcome underlying.vix.price"   # BZ 363, latent
+# underlying.gc.trades (2026-11-21, prod-only reset-preserved) is deliberately NOT here: its own
+# declaration time-bounds it (retention.ms 7 d in topics.env), so the bytes rule never reaches it.
 # options.ibkr.gex.status was a latent BZ 363 member above until 2026-10-18 and now has a POSITIVE
 # reason to be exempt: the Avro cutover made it PURE COMPACT (cleanup.policy=compact, no delete
 # half), and a pure-compact topic never evicts by bytes or by time at all — so a retention.bytes

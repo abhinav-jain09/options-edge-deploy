@@ -1,0 +1,39 @@
+# STANDALONE gc-feed overlay — dev. The monolithic dev deploy renders this
+# service via k8s/overlays/dev.
+#
+# ⚠ MIRROR RULE: every gc-feed-targeting patch in
+# k8s/overlays/dev/kustomization.yaml MUST be replicated here (and vice versa) —
+# validate-services enforces it.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - ../../base
+patches:
+  # Dev runs at ZERO replicas ON PURPOSE: one gold Databento account/key, and
+  # production owns it — a dev session would spend the same live-session budget.
+  # The base env also carries prod broker addresses; it never runs in dev.
+  - target:
+      kind: Deployment
+      name: gc-feed-service
+    patch: |-
+      - op: replace
+        path: /spec/replicas
+        value: 0
+  # Dev always re-pulls the freshly-built :dev image (mirror of the monolith's
+  # all-Deployments imagePullPolicy patch, scoped to this service).
+  - target:
+      kind: Deployment
+      name: gc-feed-service
+    patch: |-
+      - op: add
+        path: /spec/template/spec/containers/0/imagePullPolicy
+        value: Always
+      - op: add
+        path: /spec/progressDeadlineSeconds
+        value: 1200
+# Mirror of the monolith dev overlay's registry remap (validate-services: mono==slice).
+# At-rest render only; the service never runs in dev (replicas 0 above).
+images:
+  - name: 192.168.100.252:5000/options-edge-databento-feed
+    newName: host.docker.internal:5001/options-edge-databento-feed
+    newTag: dev

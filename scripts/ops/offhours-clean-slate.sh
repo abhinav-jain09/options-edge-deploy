@@ -82,7 +82,7 @@ STATE_RESET_MODE="${STATE_RESET_MODE:-recreate}"
 # standing rule is that it stays up — so it must not ride the pipeline scale-down/scale-up.
 # 2026-11-19: the default is now the whole PRODUCTION MANDATORY set declared in config/prod-mandatory-services.txt
 # (tests/test_prod_mandatory_services.py fails CI if this alternation and that file differ).
-SCALE_EXEMPT_RE="${SCALE_EXEMPT_RE:-^(oe-keycloak|options-edge-web|options-edge-redis|feed-gateway-service|options-edge-databento-feed|raw-to-display-databento-service|raw-postgres-writer|hpsf-postgres-writer-service|stock-gex-service|stock-gex-close-scheduler)$}"
+SCALE_EXEMPT_RE="${SCALE_EXEMPT_RE:-^(oe-keycloak|options-edge-web|options-edge-redis|feed-gateway-service|options-edge-databento-feed|raw-to-display-databento-service|raw-postgres-writer|hpsf-postgres-writer-service|stock-gex-service|stock-gex-close-scheduler|gc-feed-service)$}"
 # What happens to the NON-preserved, non-system topics (step A):
 #   purge  — state topics (*-changelog/*-repartition) deleted, every other topic emptied in place with
 #            delete-records (topic, partition count and config survive). Original behaviour.

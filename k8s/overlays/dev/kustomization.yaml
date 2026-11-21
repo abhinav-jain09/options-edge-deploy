@@ -133,6 +133,10 @@ resources:
   # owns it. MIRRORS k8s/services/nifty-trade-feed/overlays/dev exactly —
   # validate-services enforces it.
   - ../../services/nifty-trade-feed/base
+  # gc-feed: GOLD (GC futures) Databento trades feed. Dev renders at replicas 0
+  # (patch below) — one gold Databento account, prod owns it. MIRRORS
+  # k8s/services/gc-feed/overlays/dev exactly — validate-services enforces it.
+  - ../../services/gc-feed/base
 patches:
   - path: web-immutable-assets-patch.yaml
   # whatif-map: §9's move state needs the swing pivots (C-239); dev only, see the patch header.
@@ -204,6 +208,16 @@ patches:
   - target:
       kind: Deployment
       name: nifty-gex-service
+    patch: |-
+      - op: replace
+        path: /spec/replicas
+        value: 0
+  # gc-feed runs at ZERO replicas on dev (mirror of the standalone slice patch):
+  # one gold Databento account/key, production owns it, and the base env carries
+  # prod broker addresses.
+  - target:
+      kind: Deployment
+      name: gc-feed-service
     patch: |-
       - op: replace
         path: /spec/replicas
