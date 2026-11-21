@@ -140,7 +140,7 @@ pipeline {
               sh '''
                 set -euo pipefail
                 ssh -o BatchMode=yes "abhinav@$PROD_BUILD_HOST" \
-                  "cd '$BUILD_DIR' && docker build -t '$IMAGE_REF' -t '$UNIQUE_REF' . && docker push '$IMAGE_REF' && docker push '$UNIQUE_REF' && rm -rf '$BUILD_DIR'" \
+                  "cd '$BUILD_DIR' && docker build -t '$IMAGE_REF' -t '$UNIQUE_REF' . && docker push '$IMAGE_REF' && docker push '$UNIQUE_REF' && OE_ALLOW_RECURSIVE_RM=1 rm -rf '$BUILD_DIR'" \
                   | tee ".jenkins-tmp/nifty-push-$BUILD_ID.log"
               '''
             } else {
