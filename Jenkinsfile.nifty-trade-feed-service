@@ -84,6 +84,15 @@ pipeline {
       steps {
         sh '''
           set -euo pipefail
+          # SCOPED validation (mirrors Jenkinsfile.web-service / service-deploy): this job
+          # deploys ONLY the trade feed to ONE env, so validate exactly that — slice
+          # structure, blast radius, image name and the mirror rule for THIS service/env.
+          # The whole-fleet sweep + global invariants run in full-fleet mode on CI and
+          # manual validate-services.sh, not on each deploy; builds #3/#4 also showed the
+          # agent cannot run the global verify-topics-pure-compact harness (pre-existing,
+          # env-specific — it passes with a clean PATH and never ran on this agent before).
+          export VALIDATE_ONLY_SERVICE="nifty-trade-feed"
+          export VALIDATE_ONLY_ENV="$ENVIRONMENT"
           bash scripts/ci/validate-services.sh
         '''
       }
