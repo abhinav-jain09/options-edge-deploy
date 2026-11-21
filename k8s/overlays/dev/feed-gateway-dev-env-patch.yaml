@@ -246,6 +246,12 @@ spec:
             # Production remains default-off because its overlay does not set this flag.
             - name: GAMMA_NAVIGATION_ENABLED
               value: "true"
+            # Dev-only reader of the What-If SIGNAL line (C-250): GET /api/what-if/line serves the
+            # signal layer's newest line per chain. Production remains default-off because its
+            # overlay does not set this flag, and the signal layer publishes on dev only
+            # (OE_WHATIF_SIGNAL_ENABLED on whatif-map-service's dev overlay).
+            - name: WHATIF_SIGNAL_READER_ENABLED
+              value: "true"
             # Dev-only relay of the GAMMA ZONE and its session volume profile, the two topics
             # gamma-zone-service writes. The page at /gamma-zone reads both: the measurement, and
             # the profile that answers "how many contracts traded between these two strikes".

@@ -144,6 +144,8 @@ spec:
               value: "true"
             - name: GAMMA_NAVIGATION_ENABLED
               value: "true"
+            - name: WHATIF_SIGNAL_READER_ENABLED
+              value: "true"
             - name: GAMMA_ZONE_ENABLED
               value: "true"
             - name: GAMMA_EFFORT_ENABLED
