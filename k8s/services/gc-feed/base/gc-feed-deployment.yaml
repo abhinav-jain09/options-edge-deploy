@@ -82,10 +82,18 @@ spec:
               value: "continuous"
             - name: KAFKA_HPSF_ES_TRADES_TOPIC
               value: "underlying.gc.trades"
-            # Recover the earliest hole in the last 24h after a restart (replay records
-            # existing Kafka identities first and publishes only the missing interval).
+            # 0, NOT 1440 (observed live 2026-11-21): any value > 0 forces a SEPARATE
+            # Databento live client for the trades, while this instance's MAIN client has
+            # ZERO subscriptions (every option schema is off) — its session ends
+            # immediately, the feed reconnect-loops for ever (5→60 s backoff), and every
+            # flap restarts the trades client with it. With 0 and an identical dataset the
+            # GC trades RIDE the main client (use_separate_es_live_client — the same
+            # mechanism the es-feed manifest documents), the session always has one
+            # subscription, and there is exactly one connection. Trade-off accepted: no
+            # 24 h hole-recovery replay on restart (Databento historical replay can
+            # backfill out of band if ever needed).
             - name: DATABENTO_ES_TRADES_REPLAY_START_MINUTES
-              value: "1440"
+              value: "0"
             - name: DATABENTO_ES_TRADES_HEARTBEAT_ENABLED
               value: "true"
             - name: KAFKA_ES_TRADES_HEARTBEAT_TOPIC
